@@ -185,7 +185,6 @@ function App() {
   const draggingId = useRef(null);
   const dragOffset = useRef({ x: 0, y: 0 });
 
-  // REALTIME FIREBASE SYNC: BioBank items stream instantly to both laptop & mobile
   useEffect(() => {
     const bankRef = ref(db, 'globalBioBank');
     const unsubscribe = onValue(bankRef, (snapshot) => {
@@ -243,33 +242,34 @@ function App() {
     };
   };
 
-  const handleMouseDown = (id, e) => {
-    e.stopPropagation();
+  // Unified start handler for both mouse and touch
+  const handleDragStart = (id, clientX, clientY) => {
     draggingId.current = id;
     setSelectedMicrobeId(id);
 
     const colony = microbes.find((m) => m.id === id);
     if (colony && dishRef.current) {
       const rect = dishRef.current.getBoundingClientRect();
-      const mouseX = e.clientX - rect.left;
-      const mouseY = e.clientY - rect.top;
+      const xPos = clientX - rect.left;
+      const yPos = clientY - rect.top;
 
       dragOffset.current = {
-        x: mouseX - colony.x,
-        y: mouseY - colony.y
+        x: xPos - colony.x,
+        y: yPos - colony.y
       };
     }
   };
 
-  const handleMouseMove = (e) => {
+  // Unified move handler for both mouse and touch
+  const handleDragMove = (clientX, clientY) => {
     if (!draggingId.current || !dishRef.current) return;
 
     const rect = dishRef.current.getBoundingClientRect();
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
+    const xPos = clientX - rect.left;
+    const yPos = clientY - rect.top;
 
-    let newX = mouseX - dragOffset.current.x;
-    let newY = mouseY - dragOffset.current.y;
+    let newX = xPos - dragOffset.current.x;
+    let newY = yPos - dragOffset.current.y;
 
     const centerX = 235;
     const centerY = 245;
@@ -287,7 +287,7 @@ function App() {
     );
   };
 
-  const handleMouseUp = () => {
+  const handleDragEnd = () => {
     draggingId.current = null;
   };
 
@@ -334,7 +334,6 @@ function App() {
         isDying: false
       };
 
-      // Push custom drawing instantly to Firebase Realtime Database
       const bankRef = ref(db, 'globalBioBank');
       push(bankRef, {
         id: Date.now(),
@@ -392,8 +391,12 @@ function App() {
 
   return (
     <div 
-      onMouseMove={handleMouseMove} 
-      onMouseUp={handleMouseUp} 
+      onMouseMove={(e) => handleDragMove(e.clientX, e.clientY)}
+      onTouchMove={(e) => {
+        if (e.touches[0]) handleDragMove(e.touches[0].clientX, e.touches[0].clientY);
+      }}
+      onMouseUp={handleDragEnd}
+      onTouchEnd={handleDragEnd}
       style={{ padding: '40px', minHeight: '100vh', position: 'relative', userSelect: 'none' }}
     >
       <style>{`
@@ -502,7 +505,14 @@ function App() {
                   return (
                     <div 
                       key={m.id} 
-                      onMouseDown={(e) => handleMouseDown(m.id, e)}
+                      onMouseDown={(e) => {
+                        e.stopPropagation();
+                        handleDragStart(m.id, e.clientX, e.clientY);
+                      }}
+                      onTouchStart={(e) => {
+                        e.stopPropagation();
+                        if (e.touches[0]) handleDragStart(m.id, e.touches[0].clientX, e.touches[0].clientY);
+                      }}
                       className={m.isDying ? 'dying-organism' : ''} 
                       style={{ 
                         position: 'absolute', 
@@ -513,7 +523,8 @@ function App() {
                         border: isSelected ? '2px dashed #2563EB' : '2px solid transparent',
                         borderRadius: '50%',
                         padding: '4px',
-                        transition: 'border 0.2s ease'
+                        transition: 'border 0.2s ease',
+                        touchAction: 'none'
                       }}
                     >
                       {m.type === 'custom' ? (
