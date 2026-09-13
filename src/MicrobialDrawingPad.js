@@ -2,9 +2,9 @@ import React, { useRef, useState, useEffect } from 'react';
 
 function MicrobialDrawingPad({ onInoculate }) {
   const canvasRef = useRef(null);
+  const [isDrawing, setIsDrawing] = useState(false);
   const [brushColor, setBrushColor] = useState('#2E7D32'); // Default green colony
   const [brushSize, setBrushSize] = useState(16);
-  const isDrawingRef = useRef(false);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -15,54 +15,64 @@ function MicrobialDrawingPad({ onInoculate }) {
     ctx.fillRect(0, 0, canvas.width, canvas.height);
   }, []);
 
-  const getPos = (e) => {
+  const getCoordinates = (e) => {
     const canvas = canvasRef.current;
     if (!canvas) return { x: 0, y: 0 };
     const rect = canvas.getBoundingClientRect();
+    
+    let clientX, clientY;
+
+    if (e.touches && e.touches.length > 0) {
+      clientX = e.touches[0].clientX;
+      clientY = e.touches[0].clientY;
+    } else if (e.changedTouches && e.changedTouches.length > 0) {
+      clientX = e.changedTouches[0].clientX;
+      clientY = e.changedTouches[0].clientY;
+    } else {
+      clientX = e.clientX;
+      clientY = e.clientY;
+    }
+
     const scaleX = canvas.width / rect.width;
     const scaleY = canvas.height / rect.height;
+
     return {
-      x: (e.clientX - rect.left) * scaleX,
-      y: (e.clientY - rect.top) * scaleY
+      x: (clientX - rect.left) * scaleX,
+      y: (clientY - rect.top) * scaleY
     };
   };
 
-  const handlePointerDown = (e) => {
-    e.target.setPointerCapture(e.pointerId);
-    isDrawingRef.current = true;
+  const startDrawing = (e) => {
+    if (e.cancelable) e.preventDefault(); // Prevents page scrolling on mobile
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
-    const pos = getPos(e);
+    const { x, y } = getCoordinates(e);
 
+    setIsDrawing(true);
     ctx.beginPath();
-    ctx.moveTo(pos.x, pos.y);
+    ctx.moveTo(x, y);
     ctx.strokeStyle = brushColor;
     ctx.lineWidth = brushSize;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
   };
 
-  const handlePointerMove = (e) => {
-    if (!isDrawingRef.current) return;
+  const draw = (e) => {
+    if (!isDrawing) return;
+    if (e.cancelable) e.preventDefault();
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
-    const pos = getPos(e);
+    const { x, y } = getCoordinates(e);
 
-    ctx.lineTo(pos.x, pos.y);
+    ctx.lineTo(x, y);
     ctx.stroke();
   };
 
-  const handlePointerUp = (e) => {
-    if (isDrawingRef.current) {
-      isDrawingRef.current = false;
-      try {
-        e.target.releasePointerCapture(e.pointerId);
-      } catch (err) {
-        // Ignore if pointer capture wasn't active
-      }
-    }
+  const stopDrawing = (e) => {
+    if (e && e.cancelable) e.preventDefault();
+    setIsDrawing(false);
   };
 
   const clearCanvas = () => {
@@ -87,16 +97,20 @@ function MicrobialDrawingPad({ onInoculate }) {
         ref={canvasRef}
         width={260}
         height={260}
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUp}
-        onPointerCancel={handlePointerUp}
+        onMouseDown={startDrawing}
+        onMouseMove={draw}
+        onMouseUp={stopDrawing}
+        onMouseLeave={stopDrawing}
+        onTouchStart={startDrawing}
+        onTouchMove={draw}
+        onTouchEnd={stopDrawing}
+        onTouchCancel={stopDrawing}
         style={{
           border: '2px solid #1B4D3E',
           borderRadius: '50%',
           backgroundColor: '#F4F6F6',
           cursor: 'crosshair',
-          touchAction: 'none', // Critical: stops mobile browsers from scrolling or zooming while drawing
+          touchAction: 'none', // Crucial: disables mobile pinch-zoom and scroll gestures on the canvas
           boxShadow: 'inset 0 2px 6px rgba(0,0,0,0.1)'
         }}
       />
