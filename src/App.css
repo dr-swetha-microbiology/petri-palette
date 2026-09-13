@@ -1,0 +1,87 @@
+.App {
+  text-align: center;
+}
+
+.App-logo {
+  height: 40vmin;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .App-logo {
+    animation: App-logo-spin infinite 20s linear;
+  }
+}
+
+.App-header {
+  background-color: #282c34;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  font-size: calc(10px + 2vmin);
+  color: white;
+}
+
+.App-link {
+  color: #61dafb;
+}
+
+@keyframes App-logo-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+/* Cream Grid Background */
+body {
+  margin: 0;
+  background-color: #f5f0eb; /* Original cream color */
+  background-image: 
+    linear-gradient(to right, rgba(180, 160, 140, 0.25) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(180, 160, 140, 0.25) 1px, transparent 1px);
+  background-size: 30px 30px; /* Equal square grid */
+  font-family: 'Silkscreen', cursive;
+}
+
+/* 3D Cyan & Magenta Retro Title Effect */
+.title-pixel {
+  font-family: 'Silkscreen', cursive;
+  font-weight: 700;
+  color: #ffffff;
+  text-shadow: 
+    -2px -2px 0 #000,  
+     2px -2px 0 #000,
+    -2px  2px 0 #000,
+     2px  2px 0 #000,
+     4px  4px 0 #00e5ff, /* Vibrant Cyan Layer */
+     7px  7px 0 #d500f9, /* Magenta Layer */
+     10px 10px 0 #12002b; /* Dark Shadow Layer */
+}
+
+/* Retro Styled Buttons */
+button {
+  font-family: 'Silkscreen', cursive;
+  background-color: #00e5ff;
+  color: #ffffff;
+  border: 2px solid #000000;
+  border-radius: 6px;
+  padding: 8px 16px;
+  cursor: pointer;
+  text-shadow: 
+    -1px -1px 0 #000,  
+     1px -1px 0 #000,
+    -1px  1px 0 #000,
+     1px  1px 0 #000,
+     2px  2px 0 #d500f9;
+  box-shadow: 3px 3px 0px #000000;
+  transition: transform 0.1s ease;
+}
+
+button:hover {
+  transform: translate(-1px, -1px);
+  box-shadow: 4px 4px 0px #000000;
+}
