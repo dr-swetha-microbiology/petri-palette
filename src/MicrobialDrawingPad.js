@@ -5,7 +5,7 @@ const MicrobialDrawingPad = ({ onInoculate }) => {
   const isDrawingRef = useRef(false);
   const lastPointRef = useRef(null);
 
-  const [color, setColor] = useState('#E74C3C');
+  const [color] = useState('#E74C3C');
 
   useEffect(() => {
     const canvas = canvasRef.current;
