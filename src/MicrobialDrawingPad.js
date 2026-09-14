@@ -6,6 +6,15 @@ function MicrobialDrawingPad({ onInoculate }) {
   const [brushColor, setBrushColor] = useState('#2E7D32');
   const [brushSize, setBrushSize] = useState(16);
 
+  // Keep refs for current color/size so event listeners don't need to re-bind constantly
+  const brushColorRef = useRef(brushColor);
+  const brushSizeRef = useRef(brushSize);
+
+  useEffect(() => {
+    brushColorRef.current = brushColor;
+    brushSizeRef.current = brushSize;
+  }, [brushColor, brushSize]);
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -29,8 +38,8 @@ function MicrobialDrawingPad({ onInoculate }) {
       const pos = getPos(clientX, clientY);
       ctx.beginPath();
       ctx.moveTo(pos.x, pos.y);
-      ctx.strokeStyle = brushColor;
-      ctx.lineWidth = brushSize;
+      ctx.strokeStyle = brushColorRef.current;
+      ctx.lineWidth = brushSizeRef.current;
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
     };
@@ -51,7 +60,7 @@ function MicrobialDrawingPad({ onInoculate }) {
     const onMouseMove = (e) => moveDraw(e.clientX, e.clientY);
     const onMouseUp = () => endDraw();
 
-    // Native Touch handlers with explicit passive: false to allow drawing on mobile
+    // Native Touch handlers bound directly to canvas
     const onTouchStart = (e) => {
       if (e.cancelable) e.preventDefault();
       if (e.touches && e.touches[0]) {
@@ -76,8 +85,9 @@ function MicrobialDrawingPad({ onInoculate }) {
     window.addEventListener('mouseup', onMouseUp);
 
     canvas.addEventListener('touchstart', onTouchStart, { passive: false });
-    window.addEventListener('touchmove', onTouchMove, { passive: false });
-    window.addEventListener('touchend', onTouchEnd, { passive: false });
+    canvas.addEventListener('touchmove', onTouchMove, { passive: false });
+    canvas.addEventListener('touchend', onTouchEnd, { passive: false });
+    canvas.addEventListener('touchcancel', onTouchEnd, { passive: false });
 
     return () => {
       canvas.removeEventListener('mousedown', onMouseDown);
@@ -85,10 +95,11 @@ function MicrobialDrawingPad({ onInoculate }) {
       window.removeEventListener('mouseup', onMouseUp);
 
       canvas.removeEventListener('touchstart', onTouchStart);
-      window.removeEventListener('touchmove', onTouchMove);
-      window.removeEventListener('touchend', onTouchEnd);
+      canvas.removeEventListener('touchmove', onTouchMove);
+      canvas.removeEventListener('touchend', onTouchEnd);
+      canvas.removeEventListener('touchcancel', onTouchEnd);
     };
-  }, [brushColor, brushSize]);
+  }, []); // Empty dependency array ensures listeners bind once and stay rock-solid
 
   const clearCanvas = () => {
     const canvas = canvasRef.current;
