@@ -186,22 +186,64 @@ function App() {
   const dragOffset = useRef({ x: 0, y: 0 });
 
   useEffect(() => {
-    const bankRef = ref(db, 'globalBioBank');
-    const unsubscribe = onValue(bankRef, (snapshot) => {
-      const data = snapshot.val();
-      if (data) {
-        const parsedList = Object.keys(data).map((key) => ({
-          firebaseKey: key,
-          ...data[key]
-        }));
-        setGlobalBioBank(parsedList.reverse());
-      } else {
-        setGlobalBioBank([]);
-      }
+  const bankRef = ref(db, 'globalBioBank');
+
+  const unsubscribe = onValue(bankRef, (snapshot) => {
+    const data = snapshot.val();
+
+    if (!data) {
+      setGlobalBioBank([]);
+      setMicrobes((prev) => prev.filter((m) => !m.firebaseKey));
+      return;
+    }
+
+    const parsedList = Object.keys(data).map((key) => ({
+      firebaseKey: key,
+      ...data[key]
+    }));
+
+    setGlobalBioBank([...parsedList].reverse());
+
+    // Convert Firebase specimens into colonies on the shared Petri dish
+    const globalColonies = parsedList.map((item, index) => {
+      // Position older specimens that don't have saved coordinates
+      const fallbackAngle =
+        (index / Math.max(parsedList.length, 1)) * 2 * Math.PI;
+      const fallbackRadius = 70;
+
+      return {
+        id: `global-${item.firebaseKey}`,
+        firebaseKey: item.firebaseKey,
+        type: 'custom',
+        data: item.data,
+        radius: item.radius || 25,
+        scale: item.scale || 1,
+        x:
+          typeof item.x === 'number'
+            ? item.x
+            : Math.round(
+                235 + fallbackRadius * Math.cos(fallbackAngle)
+              ),
+        y:
+          typeof item.y === 'number'
+            ? item.y
+            : Math.round(
+                245 + fallbackRadius * Math.sin(fallbackAngle)
+              ),
+        isDying: false
+      };
     });
 
-    return () => unsubscribe();
-  }, []);
+    // Keep normal local organisms,
+    // while replacing the shared custom colonies with Firebase data
+    setMicrobes((prev) => {
+      const localMicrobes = prev.filter((m) => !m.firebaseKey);
+      return [...localMicrobes, ...globalColonies];
+    });
+  });
+
+  return () => unsubscribe();
+}, []);
 
   const validateImageSafety = (imgUrl) => {
     return new Promise((resolve) => {
@@ -304,76 +346,84 @@ function App() {
     );
   };
 
-  const handleInoculateSelected = async (customData = null, customRadius = 25) => {
-    const currentMediaInfo = MEDIA_TYPES[selectedMedium];
-    const organismInfo = ORGANISM_TEMPLATES[selectedOrganism];
-    const isBacteriaOnFungalMedia = !customData && currentMediaInfo?.selectiveFor === 'fungus' && organismInfo?.type === 'bacteria';
+ const handleInoculateSelected = async (customData = null, customRadius = 25) => {
+  const currentMediaInfo = MEDIA_TYPES[selectedMedium];
+  const organismInfo = ORGANISM_TEMPLATES[selectedOrganism];
 
-    const { x, y } = getRandomInDish();
+  const isBacteriaOnFungalMedia =
+    !customData &&
+    currentMediaInfo?.selectiveFor === 'fungus' &&
+    organismInfo?.type === 'bacteria';
 
-    let colonyObj;
+  const { x, y } = getRandomInDish();
 
-    if (customData) {
-      const isSafe = await validateImageSafety(customData);
-      if (!isSafe) {
-        setModalInfo({
-          title: 'Invalid Specimen',
-          body: 'Drawing invalid or blank. Please draw a colony specimen inside the pad.'
-        });
-        return;
-      }
+  // CUSTOM DRAWING
+  // Save it to Firebase only.
+  // The realtime listener will put it on everyone's Petri dish.
+  if (customData) {
+    const isSafe = await validateImageSafety(customData);
 
-      colonyObj = {
-        id: Date.now() + Math.random(),
-        type: 'custom',
-        data: customData,
-        radius: customRadius,
-        scale: 1.0,
-        x,
-        y,
-        isDying: false
-      };
-
-      const bankRef = ref(db, 'globalBioBank');
-      push(bankRef, {
-        id: Date.now(),
-        data: customData,
-        date: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        flags: 0
+    if (!isSafe) {
+      setModalInfo({
+        title: 'Invalid Specimen',
+        body: 'Drawing invalid or blank. Please draw a colony specimen inside the pad.'
       });
-    } else {
-      colonyObj = {
-        id: Date.now() + Math.random(),
-        type: selectedOrganism,
-        radius: ORGANISM_TEMPLATES[selectedOrganism]?.radius || 22,
-        scale: 1.0,
-        x,
-        y,
-        isDying: isBacteriaOnFungalMedia
-      };
+      return;
     }
 
-    if (microbes.length >= 20) {
-      setMicrobes([colonyObj]);
-    } else {
-      setMicrobes((prev) => [...prev, colonyObj]);
-    }
+    const bankRef = ref(db, 'globalBioBank');
 
-    setSelectedMicrobeId(colonyObj.id);
+    push(bankRef, {
+      id: Date.now(),
+      data: customData,
+      date: new Date().toLocaleTimeString([], {
+        hour: '2-digit',
+        minute: '2-digit'
+      }),
+      flags: 0,
+      x,
+      y,
+      radius: customRadius,
+      scale: 1.0
+    });
 
-    if (isBacteriaOnFungalMedia) {
-      setTimeout(() => {
-        setModalInfo({
-          title: 'Growth Inhibited (Antibiotic Activity)',
-          body: `${organismInfo.name} cannot survive on ${currentMediaInfo.name}. Added antibiotics disrupt bacterial cell wall assembly and protein synthesis.`
-        });
-      }, 800);
+    return;
+  }
 
-      setTimeout(() => {
-        setMicrobes((prev) => prev.filter((m) => m.id !== colonyObj.id));
-      }, 2500);
-    }
+  // STANDARD ORGANISM
+  const colonyObj = {
+    id: Date.now() + Math.random(),
+    type: selectedOrganism,
+    radius: ORGANISM_TEMPLATES[selectedOrganism]?.radius || 22,
+    scale: 1.0,
+    x,
+    y,
+    isDying: isBacteriaOnFungalMedia
   };
+
+  if (microbes.length >= 20) {
+    setMicrobes([colonyObj]);
+  } else {
+    setMicrobes((prev) => [...prev, colonyObj]);
+  }
+
+  setSelectedMicrobeId(colonyObj.id);
+
+  if (isBacteriaOnFungalMedia) {
+    setTimeout(() => {
+      setModalInfo({
+        title: 'Growth Inhibited (Antibiotic Activity)',
+        body: `${organismInfo.name} cannot survive on ${currentMediaInfo.name}. Added antibiotics disrupt bacterial cell wall assembly and protein synthesis.`
+      });
+    }, 800);
+
+    setTimeout(() => {
+      setMicrobes((prev) =>
+        prev.filter((m) => m.id !== colonyObj.id)
+      );
+    }, 2500);
+  }
+};
 
   const handleFlagSpecimen = (item, e) => {
     e.stopPropagation();
