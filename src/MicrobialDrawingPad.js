@@ -5,7 +5,15 @@ const MicrobialDrawingPad = ({ onInoculate }) => {
   const isDrawingRef = useRef(false);
   const lastPointRef = useRef(null);
 
-  const [color] = useState('#E74C3C');
+  const [color, setColor] = useState('#E74C3C');
+
+  const colors = [
+    { name: 'Red', value: '#E74C3C' },
+    { name: 'Orange', value: '#F39C12' },
+    { name: 'Yellow', value: '#F1C40F' },
+    { name: 'Green', value: '#2ECC71' },
+    { name: 'Blue', value: '#3498DB' }
+  ];
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -47,16 +55,14 @@ const MicrobialDrawingPad = ({ onInoculate }) => {
     const point = getPosition(e);
 
     ctx.strokeStyle = color;
+    ctx.fillStyle = color;
     ctx.lineWidth = 4;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
 
+    /* Small dot for a single tap */
     ctx.beginPath();
-    ctx.moveTo(point.x, point.y);
-
-    // Draw a small dot for taps
     ctx.arc(point.x, point.y, 2, 0, Math.PI * 2);
-    ctx.fillStyle = color;
     ctx.fill();
 
     isDrawingRef.current = true;
@@ -89,6 +95,7 @@ const MicrobialDrawingPad = ({ onInoculate }) => {
     ctx.lineWidth = 4;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
+
     ctx.stroke();
 
     lastPointRef.current = point;
@@ -140,6 +147,45 @@ const MicrobialDrawingPad = ({ onInoculate }) => {
         gap: '10px'
       }}
     >
+
+      {/* Specimen Colour Palette */}
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          gap: '8px',
+          flexWrap: 'wrap',
+          marginBottom: '2px'
+        }}
+      >
+        {colors.map((item) => (
+          <button
+            key={item.value}
+            type="button"
+            aria-label={`Select ${item.name}`}
+            title={item.name}
+            onClick={() => setColor(item.value)}
+            style={{
+              width: '28px',
+              height: '28px',
+              padding: 0,
+              borderRadius: '50%',
+              border:
+                color === item.value
+                  ? '3px solid #2C3E50'
+                  : '2px solid #666',
+              backgroundColor: item.value,
+              cursor: 'pointer',
+              boxShadow:
+                color === item.value
+                  ? '2px 2px 0px #2C3E50'
+                  : 'none'
+            }}
+          />
+        ))}
+      </div>
+
       {/* Drawing Canvas */}
       <div style={{ position: 'relative' }}>
         <canvas
@@ -150,13 +196,18 @@ const MicrobialDrawingPad = ({ onInoculate }) => {
           onPointerMove={draw}
           onPointerUp={stopDrawing}
           onPointerCancel={stopDrawing}
+          onPointerLeave={(e) => {
+            if (e.pointerType === 'mouse') {
+              stopDrawing(e);
+            }
+          }}
           style={{
             border: '2px dashed #666',
             borderRadius: '8px',
             backgroundColor: '#FAF9F6',
             cursor: 'crosshair',
 
-            /* Mobile drawing fix */
+            /* Mobile drawing */
             touchAction: 'none',
             userSelect: 'none',
             WebkitUserSelect: 'none',
@@ -165,21 +216,31 @@ const MicrobialDrawingPad = ({ onInoculate }) => {
         />
 
         <button
+          type="button"
           onClick={clearCanvas}
+          aria-label="Clear drawing"
+          title="Clear drawing"
           style={{
             position: 'absolute',
             top: 5,
             right: 5,
-            background: 'none',
+            background: '#FFF',
             border: 'none',
-            cursor: 'pointer'
+            cursor: 'pointer',
+            fontSize: '18px',
+            width: '45px',
+            height: '45px',
+            borderRadius: '0 0 8px 8px',
+            boxShadow: '2px 2px 0px #000'
           }}
         >
           ↺
         </button>
       </div>
 
+      {/* Inoculate */}
       <button
+        type="button"
         onClick={handleInoculate}
         style={{
           padding: '10px 24px',
@@ -194,6 +255,7 @@ const MicrobialDrawingPad = ({ onInoculate }) => {
       >
         Inoculate
       </button>
+
     </div>
   );
 };
