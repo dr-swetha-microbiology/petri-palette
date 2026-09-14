@@ -1,33 +1,24 @@
 import React, { useRef, useState, useEffect } from 'react';
 
-function MicrobialDrawingPad({ onInoculate }) {
+const MicrobialDrawingPad = ({ onInoculate }) => {
   const canvasRef = useRef(null);
   const isDrawingRef = useRef(false);
   const lastPointRef = useRef(null);
 
-  const [brushColor, setBrushColor] = useState('#2E7D32');
-  const [brushSize, setBrushSize] = useState(16);
+  const [color, setColor] = useState('#E74C3C');
 
-  const brushColorRef = useRef(brushColor);
-  const brushSizeRef = useRef(brushSize);
-
-  useEffect(() => {
-    brushColorRef.current = brushColor;
-    brushSizeRef.current = brushSize;
-  }, [brushColor, brushSize]);
-
-  // Set up canvas
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
     const ctx = canvas.getContext('2d');
 
-    ctx.fillStyle = '#F4F6F6';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.lineWidth = 4;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
   }, []);
 
-  const getCanvasPosition = (event) => {
+  const getPosition = (e) => {
     const canvas = canvasRef.current;
     const rect = canvas.getBoundingClientRect();
 
@@ -35,68 +26,54 @@ function MicrobialDrawingPad({ onInoculate }) {
     const scaleY = canvas.height / rect.height;
 
     return {
-      x: (event.clientX - rect.left) * scaleX,
-      y: (event.clientY - rect.top) * scaleY
+      x: (e.clientX - rect.left) * scaleX,
+      y: (e.clientY - rect.top) * scaleY
     };
   };
 
-  const handlePointerDown = (event) => {
+  const startDrawing = (e) => {
+    if (e.isPrimary === false) return;
+
+    e.preventDefault();
+
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    // Only respond to primary finger/mouse/stylus
-    if (event.isPrimary === false) return;
-
-    event.preventDefault();
-
-    // Keep receiving movement even if finger moves slightly
-    // outside the canvas.
     try {
-      canvas.setPointerCapture(event.pointerId);
-    } catch (error) {
-      // Some older browsers may not support pointer capture.
-    }
+      canvas.setPointerCapture(e.pointerId);
+    } catch (error) {}
 
     const ctx = canvas.getContext('2d');
-    const point = getCanvasPosition(event);
+    const point = getPosition(e);
 
-    isDrawingRef.current = true;
-    lastPointRef.current = point;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 4;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
 
     ctx.beginPath();
     ctx.moveTo(point.x, point.y);
 
-    ctx.strokeStyle = brushColorRef.current;
-    ctx.lineWidth = brushSizeRef.current;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-
-    // Make a dot when the user simply taps
-    ctx.beginPath();
-    ctx.arc(
-      point.x,
-      point.y,
-      brushSizeRef.current / 2,
-      0,
-      Math.PI * 2
-    );
-    ctx.fillStyle = brushColorRef.current;
+    // Draw a small dot for taps
+    ctx.arc(point.x, point.y, 2, 0, Math.PI * 2);
+    ctx.fillStyle = color;
     ctx.fill();
 
+    isDrawingRef.current = true;
     lastPointRef.current = point;
   };
 
-  const handlePointerMove = (event) => {
+  const draw = (e) => {
     if (!isDrawingRef.current) return;
-    if (event.isPrimary === false) return;
+    if (e.isPrimary === false) return;
 
-    event.preventDefault();
+    e.preventDefault();
 
     const canvas = canvasRef.current;
     if (!canvas) return;
 
     const ctx = canvas.getContext('2d');
-    const point = getCanvasPosition(event);
+    const point = getPosition(e);
     const lastPoint = lastPointRef.current;
 
     if (!lastPoint) {
@@ -108,8 +85,8 @@ function MicrobialDrawingPad({ onInoculate }) {
     ctx.moveTo(lastPoint.x, lastPoint.y);
     ctx.lineTo(point.x, point.y);
 
-    ctx.strokeStyle = brushColorRef.current;
-    ctx.lineWidth = brushSizeRef.current;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 4;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     ctx.stroke();
@@ -117,18 +94,16 @@ function MicrobialDrawingPad({ onInoculate }) {
     lastPointRef.current = point;
   };
 
-  const stopDrawing = (event) => {
-    if (event) {
-      event.preventDefault();
+  const stopDrawing = (e) => {
+    if (e) {
+      e.preventDefault();
 
       const canvas = canvasRef.current;
 
       if (canvas) {
         try {
-          canvas.releasePointerCapture(event.pointerId);
-        } catch (error) {
-          // Pointer capture may already have been released.
-        }
+          canvas.releasePointerCapture(e.pointerId);
+        } catch (error) {}
       }
     }
 
@@ -143,18 +118,17 @@ function MicrobialDrawingPad({ onInoculate }) {
     const ctx = canvas.getContext('2d');
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    ctx.fillStyle = '#F4F6F6';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
   };
 
-  const handleInoculateClick = () => {
+  const handleInoculate = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const dataUrl = canvas.toDataURL('image/png');
+    const imageData = canvas.toDataURL('image/png');
 
-    onInoculate(dataUrl, brushSize);
+    onInoculate(imageData);
+
+    clearCanvas();
   };
 
   return (
@@ -163,111 +137,65 @@ function MicrobialDrawingPad({ onInoculate }) {
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
-        gap: '10px',
-        width: '100%'
+        gap: '10px'
       }}
     >
-      <canvas
-        ref={canvasRef}
-        width={260}
-        height={260}
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={stopDrawing}
-        onPointerCancel={stopDrawing}
-        onPointerLeave={(event) => {
-          // Do NOT stop drawing here.
-          // Pointer capture keeps drawing alive on mobile.
-        }}
-        style={{
-          width: '260px',
-          height: '260px',
-          maxWidth: '90vw',
-          aspectRatio: '1 / 1',
-
-          border: '2px solid #1B4D3E',
-          borderRadius: '50%',
-          backgroundColor: '#F4F6F6',
-
-          cursor: 'crosshair',
-
-          // CRITICAL FOR MOBILE
-          touchAction: 'none',
-
-          // Prevent browser selection/drag behaviour
-          userSelect: 'none',
-          WebkitUserSelect: 'none',
-          WebkitTouchCallout: 'none',
-
-          boxShadow: 'inset 0 2px 6px rgba(0,0,0,0.1)'
-        }}
-      />
-
-      <div
-        style={{
-          display: 'flex',
-          gap: '8px',
-          alignItems: 'center',
-          flexWrap: 'wrap',
-          justifyContent: 'center',
-          width: '100%'
-        }}
-      >
-        <input
-          type="color"
-          value={brushColor}
-          onChange={(e) => setBrushColor(e.target.value)}
+      {/* Drawing Canvas */}
+      <div style={{ position: 'relative' }}>
+        <canvas
+          ref={canvasRef}
+          width={250}
+          height={200}
+          onPointerDown={startDrawing}
+          onPointerMove={draw}
+          onPointerUp={stopDrawing}
+          onPointerCancel={stopDrawing}
           style={{
-            width: '36px',
-            height: '36px',
-            border: 'none',
-            cursor: 'pointer',
-            background: 'none'
-          }}
-          title="Colony Pigment Color"
-        />
-
-        <select
-          value={brushSize}
-          onChange={(e) => setBrushSize(Number(e.target.value))}
-          style={{
-            padding: '6px',
+            border: '2px dashed #666',
             borderRadius: '8px',
-            border: '1px solid #CBD5E1',
-            fontSize: '12px'
+            backgroundColor: '#FAF9F6',
+            cursor: 'crosshair',
+
+            /* Mobile drawing fix */
+            touchAction: 'none',
+            userSelect: 'none',
+            WebkitUserSelect: 'none',
+            WebkitTouchCallout: 'none'
           }}
-        >
-          <option value={10}>Fine Point</option>
-          <option value={16}>Standard Colony</option>
-          <option value={26}>Large Mucoid</option>
-        </select>
+        />
 
         <button
           onClick={clearCanvas}
           style={{
-            padding: '6px 12px',
-            fontSize: '12px',
-            backgroundColor: '#E2E8F0',
-            color: '#334155'
+            position: 'absolute',
+            top: 5,
+            right: 5,
+            background: 'none',
+            border: 'none',
+            cursor: 'pointer'
           }}
         >
-          Clear
-        </button>
-
-        <button
-          onClick={handleInoculateClick}
-          style={{
-            padding: '6px 14px',
-            fontSize: '12px',
-            backgroundColor: '#1B4D3E',
-            color: '#FFF'
-          }}
-        >
-          Inoculate Custom
+          ↺
         </button>
       </div>
+
+      <button
+        onClick={handleInoculate}
+        style={{
+          padding: '10px 24px',
+          fontSize: '16px',
+          fontWeight: 'bold',
+          borderRadius: '20px',
+          border: '2px solid #2C3E50',
+          backgroundColor: '#FFF',
+          cursor: 'pointer',
+          boxShadow: '2px 2px 0px #2C3E50'
+        }}
+      >
+        Inoculate
+      </button>
     </div>
   );
-}
+};
 
 export default MicrobialDrawingPad;
