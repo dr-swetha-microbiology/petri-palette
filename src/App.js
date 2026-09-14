@@ -181,6 +181,15 @@ function App() {
   const [modalInfo, setModalInfo] = useState(null);
 
   const [selectedMicrobeId, setSelectedMicrobeId] = useState(null);
+  const [visitorId] = useState(() => {
+  const saved = localStorage.getItem('petriPaletteVisitorId');
+
+  if (saved) return saved;
+
+  const newId = crypto.randomUUID();
+  localStorage.setItem('petriPaletteVisitorId', newId);
+  return newId;
+});
   const dishRef = useRef(null);
   const draggingId = useRef(null);
   const dragOffset = useRef({ x: 0, y: 0 });
@@ -212,10 +221,11 @@ function App() {
       const fallbackRadius = 70;
 
       return {
-        id: `global-${item.firebaseKey}`,
-        firebaseKey: item.firebaseKey,
-        type: 'custom',
-        data: item.data,
+  id: `global-${item.firebaseKey}`,
+  firebaseKey: item.firebaseKey,
+  creatorId: item.creatorId,
+  type: 'custom',
+  data: item.data,
         radius: item.radius || 25,
         scale: item.scale || 1,
         x:
@@ -270,81 +280,191 @@ function App() {
     });
   };
 
-  const getRandomInDish = () => {
-    const centerX = 235;
-    const centerY = 245; 
-    const maxRadius = 110;
+const getRandomInDish = (newRadius = 25) => {
+  const centerX = 235;
+  const centerY = 245;
 
+  // Larger usable area of the Petri dish
+  const maxRadius = 185;
+
+  const existingColonies = microbes.filter(
+    (m) => m.x !== undefined && m.y !== undefined
+  );
+
+  // Try several positions until we find one that does not overlap
+  for (let attempt = 0; attempt < 100; attempt++) {
     const angle = Math.random() * 2 * Math.PI;
-    const distance = Math.sqrt(Math.random()) * maxRadius;
+    const distance = Math.sqrt(Math.random()) * (maxRadius - newRadius);
 
-    return {
-      x: Math.round(centerX + distance * Math.cos(angle)),
-      y: Math.round(centerY + distance * Math.sin(angle))
-    };
-  };
+    const x = Math.round(centerX + distance * Math.cos(angle));
+    const y = Math.round(centerY + distance * Math.sin(angle));
 
-  // Unified start handler for both mouse and touch
-  const handleDragStart = (id, clientX, clientY) => {
-    draggingId.current = id;
-    setSelectedMicrobeId(id);
+    const overlaps = existingColonies.some((m) => {
+      const existingRadius = (m.radius || 25) * (m.scale || 1);
+      const requiredDistance = newRadius + existingRadius + 8;
 
-    const colony = microbes.find((m) => m.id === id);
-    if (colony && dishRef.current) {
-      const rect = dishRef.current.getBoundingClientRect();
-      const xPos = clientX - rect.left;
-      const yPos = clientY - rect.top;
+      return Math.hypot(x - m.x, y - m.y) < requiredDistance;
+    });
 
-      dragOffset.current = {
-        x: xPos - colony.x,
-        y: yPos - colony.y
-      };
+    if (!overlaps) {
+      return { x, y };
     }
+  }
+
+  // Fallback if the plate becomes crowded
+  return {
+    x: centerX,
+    y: centerY
   };
+};
+// Unified start handler for both mouse and touch
+const handleDragStart = (id, clientX, clientY) => {
+  const colony = microbes.find((m) => m.id === id);
 
-  // Unified move handler for both mouse and touch
-  const handleDragMove = (clientX, clientY) => {
-    if (!draggingId.current || !dishRef.current) return;
+  if (!colony) return;
 
+  // Other users cannot move someone else's global culture
+  if (
+    colony.firebaseKey &&
+    colony.creatorId !== visitorId
+  ) {
+    draggingId.current = null;
+    return;
+  }
+
+  draggingId.current = id;
+  setSelectedMicrobeId(id);
+
+  if (dishRef.current) {
     const rect = dishRef.current.getBoundingClientRect();
+
     const xPos = clientX - rect.left;
     const yPos = clientY - rect.top;
 
-    let newX = xPos - dragOffset.current.x;
-    let newY = yPos - dragOffset.current.y;
+    dragOffset.current = {
+      x: xPos - colony.x,
+      y: yPos - colony.y
+    };
+  }
+};
 
-    const centerX = 235;
-    const centerY = 245;
-    const maxRadius = 110;
+// Unified move handler for both mouse and touch
+const handleDragMove = (clientX, clientY) => {
+  if (!draggingId.current || !dishRef.current) return;
 
-    const dist = Math.hypot(newX - centerX, newY - centerY);
-    if (dist > maxRadius) {
-      const angle = Math.atan2(newY - centerY, newX - centerX);
-      newX = centerX + maxRadius * Math.cos(angle);
-      newY = centerY + maxRadius * Math.sin(angle);
-    }
+  const draggingColony = microbes.find(
+    (m) => m.id === draggingId.current
+  );
 
-    setMicrobes((prev) =>
-      prev.map((m) => (m.id === draggingId.current ? { ...m, x: newX, y: newY } : m))
+  if (!draggingColony) return;
+
+  // Other users cannot move Firebase cultures
+  if (
+    draggingColony.firebaseKey &&
+    draggingColony.creatorId !== visitorId
+  ) {
+    draggingId.current = null;
+    return;
+  }
+
+  const rect = dishRef.current.getBoundingClientRect();
+  const xPos = clientX - rect.left;
+  const yPos = clientY - rect.top;
+
+  let newX = xPos - dragOffset.current.x;
+  let newY = yPos - dragOffset.current.y;
+
+  const centerX = 235;
+  const centerY = 245;
+
+  // Allow movement across almost the entire Petri dish
+  const plateRadius = 185;
+  const colonyRadius =
+    (draggingColony.radius || 25) * (draggingColony.scale || 1);
+
+  const maxDistance = plateRadius - colonyRadius;
+
+  const dist = Math.hypot(
+    newX - centerX,
+    newY - centerY
+  );
+
+  if (dist > maxDistance) {
+    const angle = Math.atan2(
+      newY - centerY,
+      newX - centerX
     );
-  };
+
+    newX =
+      centerX +
+      maxDistance * Math.cos(angle);
+
+    newY =
+      centerY +
+      maxDistance * Math.sin(angle);
+  }
+
+  // Prevent overlap with other cultures
+  const overlaps = microbes.some((m) => {
+    if (m.id === draggingColony.id) return false;
+    if (m.x === undefined || m.y === undefined) return false;
+
+    const otherRadius =
+      (m.radius || 25) * (m.scale || 1);
+
+    const requiredDistance =
+      colonyRadius + otherRadius + 8;
+
+    return (
+      Math.hypot(
+        newX - m.x,
+        newY - m.y
+      ) < requiredDistance
+    );
+  });
+
+  // If position would overlap another culture,
+  // keep the previous position.
+  if (overlaps) return;
+
+  setMicrobes((prev) =>
+    prev.map((m) =>
+      m.id === draggingId.current
+        ? {
+            ...m,
+            x: newX,
+            y: newY
+          }
+        : m
+    )
+  );
+};
 
   const handleDragEnd = () => {
     draggingId.current = null;
   };
 
-  const handleScaleChange = (id, delta) => {
-    setMicrobes((prev) =>
-      prev.map((m) => {
-        if (m.id === id) {
-          const currentScale = m.scale || 1.0;
-          const newScale = Math.min(Math.max(0.4, currentScale + delta), 3.0);
-          return { ...m, scale: parseFloat(newScale.toFixed(2)) };
+const handleScaleChange = (id, delta) => {
+  setMicrobes((prev) =>
+    prev.map((m) => {
+      if (m.id === id) {
+        if (m.firebaseKey && m.creatorId !== visitorId) {
+          return m;
         }
-        return m;
-      })
-    );
-  };
+
+        const currentScale = m.scale || 1.0;
+        const newScale = Math.min(Math.max(0.4, currentScale + delta), 3.0);
+
+        return {
+          ...m,
+          scale: parseFloat(newScale.toFixed(2))
+        };
+      }
+
+      return m;
+    })
+  );
+};
 
  const handleInoculateSelected = async (customData = null, customRadius = 25) => {
   const currentMediaInfo = MEDIA_TYPES[selectedMedium];
@@ -384,7 +504,8 @@ function App() {
       x,
       y,
       radius: customRadius,
-      scale: 1.0
+      scale: 1.0,
+creatorId: visitorId
     });
 
     return;
