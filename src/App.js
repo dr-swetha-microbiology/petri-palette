@@ -1,6 +1,6 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import MicrobialDrawingPad from './MicrobialDrawingPad';
-import { db, ref, onValue, push, remove } from './firebase';
+import { db, ref, onValue, push } from './firebase';
 import './App.css'; // Ensure App.css is explicitly imported
 
 const ORGANISM_TEMPLATES = {
@@ -179,81 +179,172 @@ function App() {
   const [selectedMedium, setSelectedMedium] = useState('sda');
   const [selectedOrganism, setSelectedOrganism] = useState('ecoli');
   const [modalInfo, setModalInfo] = useState(null);
-
-  const [selectedMicrobeId, setSelectedMicrobeId] = useState(null);
   const [visitorId] = useState(() => {
-  const saved = localStorage.getItem('petriPaletteVisitorId');
+    const saved = localStorage.getItem('petriPaletteVisitorId');
+    if (saved) return saved;
 
-  if (saved) return saved;
-
-  const newId = crypto.randomUUID();
-  localStorage.setItem('petriPaletteVisitorId', newId);
-  return newId;
-});
-  const dishRef = useRef(null);
-  const draggingId = useRef(null);
-  const dragOffset = useRef({ x: 0, y: 0 });
-
-  useEffect(() => {
-  const bankRef = ref(db, 'globalBioBank');
-
-  const unsubscribe = onValue(bankRef, (snapshot) => {
-    const data = snapshot.val();
-
-    if (!data) {
-      setGlobalBioBank([]);
-      setMicrobes((prev) => prev.filter((m) => !m.firebaseKey));
-      return;
-    }
-
-    const parsedList = Object.keys(data).map((key) => ({
-      firebaseKey: key,
-      ...data[key]
-    }));
-
-    setGlobalBioBank([...parsedList].reverse());
-
-    // Convert Firebase specimens into colonies on the shared Petri dish
-    const globalColonies = parsedList.map((item, index) => {
-      // Position older specimens that don't have saved coordinates
-      const fallbackAngle =
-        (index / Math.max(parsedList.length, 1)) * 2 * Math.PI;
-      const fallbackRadius = 70;
-
-      return {
-  id: `global-${item.firebaseKey}`,
-  firebaseKey: item.firebaseKey,
-  creatorId: item.creatorId,
-  type: 'custom',
-  data: item.data,
-        radius: item.radius || 25,
-        scale: item.scale || 1,
-        x:
-          typeof item.x === 'number'
-            ? item.x
-            : Math.round(
-                235 + fallbackRadius * Math.cos(fallbackAngle)
-              ),
-        y:
-          typeof item.y === 'number'
-            ? item.y
-            : Math.round(
-                245 + fallbackRadius * Math.sin(fallbackAngle)
-              ),
-        isDying: false
-      };
-    });
-
-    // Keep normal local organisms,
-    // while replacing the shared custom colonies with Firebase data
-    setMicrobes((prev) => {
-      const localMicrobes = prev.filter((m) => !m.firebaseKey);
-      return [...localMicrobes, ...globalColonies];
-    });
+    const newId = crypto.randomUUID();
+    localStorage.setItem('petriPaletteVisitorId', newId);
+    return newId;
   });
 
-  return () => unsubscribe();
-}, []);
+  const MAX_GLOBAL_ON_PLATE = 14;
+  const MIN_GLOBAL_ON_PLATE = 5;
+
+  const shuffleArray = (items) => {
+    const copy = [...items];
+    for (let i = copy.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [copy[i], copy[j]] = [copy[j], copy[i]];
+    }
+    return copy;
+  };
+
+  const getCustomDisplayRadius = (item) => {
+    if (item.width && item.height) {
+      return Math.hypot(item.width / 2, item.height / 2) + 4;
+    }
+    return (item.radius || 25) * (item.scale || 1) + 4;
+  };
+
+  // The shared plate contains ONLY specimens from the Global Specimen Bio-Bank.
+  // Each refresh selects a random subset and gives them fresh random positions
+  // inside the coloured agar. Standard template organisms are never added here.
+  const getVisibleGlobalSpecimens = (parsedList) => {
+    const centerX = 260;
+    const centerY = 260;
+    const agarRadius = 168;
+    const gap = 2;
+    const visible = [];
+
+    const tryPlace = (item, attempts = 1500) => {
+      const radius = getCustomDisplayRadius(item);
+      const usableRadius = agarRadius - radius;
+      if (usableRadius <= 0) return null;
+
+      const isValidPosition = (x, y) => {
+        if (typeof x !== 'number' || typeof y !== 'number') return false;
+        if (Math.hypot(x - centerX, y - centerY) > usableRadius) return false;
+
+        return !visible.some((other) => {
+          const otherRadius = getCustomDisplayRadius(other);
+          return Math.hypot(x - other._displayX, y - other._displayY) <
+            radius + otherRadius + gap;
+        });
+      };
+
+      // Keep the position saved with the specimen whenever it is still valid.
+      // This makes a newly inoculated specimen appear immediately and keeps
+      // the same position for everyone viewing the shared plate.
+      if (isValidPosition(item.x, item.y)) {
+        return { x: item.x, y: item.y };
+      }
+
+      for (let attempt = 0; attempt < attempts; attempt += 1) {
+        const angle = Math.random() * Math.PI * 2;
+        const distance = Math.sqrt(Math.random()) * usableRadius;
+        const x = Math.round(centerX + distance * Math.cos(angle));
+        const y = Math.round(centerY + distance * Math.sin(angle));
+
+        if (isValidPosition(x, y)) return { x, y };
+      }
+
+      return null;
+    };
+
+    if (!parsedList.length) return visible;
+
+    // Always put the newest contributed specimen on the shared plate first.
+    // This guarantees that a drawing which has just been inoculated appears
+    // in real time instead of being lost in a random subset.
+    const newest = parsedList[parsedList.length - 1];
+    const newestPlaced = tryPlace(newest, 5000);
+    if (newestPlaced) {
+      visible.push({ ...newest, _displayX: newestPlaced.x, _displayY: newestPlaced.y });
+    }
+
+    // Fill the remaining spaces with randomly selected older Bio-Bank specimens.
+    const older = shuffleArray(
+      parsedList.slice(0, -1).filter((item) => item.firebaseKey !== newest.firebaseKey)
+    );
+
+    for (const item of older) {
+      if (visible.length >= MAX_GLOBAL_ON_PLATE) break;
+      const placed = tryPlace(item, 3000);
+      if (placed) {
+        visible.push({ ...item, _displayX: placed.x, _displayY: placed.y });
+      }
+    }
+
+    // If there are at least five custom specimens, keep trying until five
+    // visible custom specimens are present whenever the geometry allows it.
+    if (parsedList.length >= MIN_GLOBAL_ON_PLATE && visible.length < MIN_GLOBAL_ON_PLATE) {
+      const remaining = shuffleArray(
+        parsedList.filter((item) => !visible.some((v) => v.firebaseKey === item.firebaseKey))
+      );
+
+      for (const item of remaining) {
+        if (visible.length >= MIN_GLOBAL_ON_PLATE) break;
+        const placed = tryPlace(item, 5000);
+        if (placed) {
+          visible.push({ ...item, _displayX: placed.x, _displayY: placed.y });
+        }
+      }
+    }
+
+    return visible;
+  };
+
+  useEffect(() => {
+    const bankRef = ref(db, 'globalBioBank');
+
+    const unsubscribeBank = onValue(bankRef, (snapshot) => {
+      const data = snapshot.val();
+
+      if (!data) {
+        setGlobalBioBank([]);
+        setMicrobes((prev) => prev.filter((m) => !m.firebaseKey));
+        return;
+      }
+
+      const parsedList = Object.keys(data).map((key) => ({
+        firebaseKey: key,
+        ...data[key]
+      }));
+
+      // The gallery always keeps every contributed specimen.
+      setGlobalBioBank([...parsedList].reverse());
+
+      // The plate shows the newest specimens first. If the plate becomes
+      // crowded, older specimens naturally remain in the gallery but are
+      // no longer displayed on the shared plate. No Firebase update/delete
+      // is needed.
+      const visibleGlobalSpecimens = getVisibleGlobalSpecimens(parsedList);
+
+      const globalColonies = visibleGlobalSpecimens.map((item) => ({
+        id: `global-${item.firebaseKey}`,
+        firebaseKey: item.firebaseKey,
+        creatorId: item.creatorId,
+        type: 'custom',
+        data: item.data,
+        width: item.width,
+        height: item.height,
+        locked: true,
+        radius: item.radius || 25,
+        scale: item.scale || 1,
+        x: item._displayX,
+        y: item._displayY,
+        isDying: false
+      }));
+
+      setMicrobes((prev) => {
+        const localMicrobes = prev.filter((m) => !m.firebaseKey);
+        return [...localMicrobes, ...globalColonies];
+      });
+    });
+
+    return () => unsubscribeBank();
+  }, []);
 
   const validateImageSafety = (imgUrl) => {
     return new Promise((resolve) => {
@@ -280,206 +371,133 @@ function App() {
     });
   };
 
-const getRandomInDish = (newRadius = 25) => {
-  const centerX = 235;
-  const centerY = 245;
+const getRandomInDish = (newRadius = 25, ignoredIds = []) => {
+    const ignoredSet = new Set(Array.isArray(ignoredIds) ? ignoredIds : [ignoredIds]);
+    const centerX = 260;
+    const centerY = 260;
+    // This is the coloured agar area, not the outer rim of the PNG dish.
+    const plateRadius = 168;
+    const gap = 2;
 
-  // Larger usable area of the Petri dish
-  const maxRadius = 185;
+    const existingColonies = microbes.filter(
+      (m) =>
+        typeof m.x === 'number' &&
+        typeof m.y === 'number' &&
+        !ignoredSet.has(m.firebaseKey) && !ignoredSet.has(m.id)
+    );
 
-  const existingColonies = microbes.filter(
-    (m) => m.x !== undefined && m.y !== undefined
-  );
+    // Custom drawings are displayed at 75% of their cropped drawing size.
+    // The app never shrinks them further to force a fit.
+    if (newRadius + 4 > plateRadius) return null;
 
-  // Try several positions until we find one that does not overlap
-  for (let attempt = 0; attempt < 100; attempt++) {
-    const angle = Math.random() * 2 * Math.PI;
-    const distance = Math.sqrt(Math.random()) * (maxRadius - newRadius);
+    const usableRadius = plateRadius - newRadius - 4;
 
-    const x = Math.round(centerX + distance * Math.cos(angle));
-    const y = Math.round(centerY + distance * Math.sin(angle));
+    // Try many random positions so the app can use small free gaps
+    // between existing cultures before declaring the dish full.
+    for (let attempt = 0; attempt < 3000; attempt++) {
+      const angle = Math.random() * 2 * Math.PI;
+      const distance = Math.sqrt(Math.random()) * usableRadius;
 
-    const overlaps = existingColonies.some((m) => {
-      const existingRadius = (m.radius || 25) * (m.scale || 1);
-      const requiredDistance = newRadius + existingRadius + 8;
+      const x = Math.round(centerX + distance * Math.cos(angle));
+      const y = Math.round(centerY + distance * Math.sin(angle));
 
-      return Math.hypot(x - m.x, y - m.y) < requiredDistance;
-    });
+      const overlaps = existingColonies.some((m) => {
+        const existingRadius = m.width && m.height
+          ? Math.hypot(m.width / 2, m.height / 2) + 6
+          : (m.radius || 25) * (m.scale || 1) + 6;
 
-    if (!overlaps) {
-      return { x, y };
+        return Math.hypot(x - m.x, y - m.y) < newRadius + existingRadius + gap;
+      });
+
+      if (!overlaps) return { x, y };
     }
-  }
 
-  // Fallback if the plate becomes crowded
-  return {
-    x: centerX,
-    y: centerY
+    return null;
   };
-};
-// Unified start handler for both mouse and touch
-const handleDragStart = (id, clientX, clientY) => {
-  const colony = microbes.find((m) => m.id === id);
 
-  if (!colony) return;
+  // Crop transparent space around the drawing so its displayed size
+  // matches the actual area the user drew.
+  const prepareCustomSpecimen = (imgUrl) => {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
 
-  // Other users cannot move someone else's global culture
-  if (
-    colony.firebaseKey &&
-    colony.creatorId !== visitorId
-  ) {
-    draggingId.current = null;
-    return;
-  }
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.width;
+        canvas.height = img.height;
 
-  draggingId.current = id;
-  setSelectedMicrobeId(id);
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0);
 
-  if (dishRef.current) {
-    const rect = dishRef.current.getBoundingClientRect();
+        const pixels = ctx.getImageData(
+          0, 0, canvas.width, canvas.height
+        ).data;
 
-    const xPos = clientX - rect.left;
-    const yPos = clientY - rect.top;
+        let minX = canvas.width;
+        let minY = canvas.height;
+        let maxX = -1;
+        let maxY = -1;
 
-    dragOffset.current = {
-      x: xPos - colony.x,
-      y: yPos - colony.y
-    };
-  }
-};
+        for (let y = 0; y < canvas.height; y++) {
+          for (let x = 0; x < canvas.width; x++) {
+            const alpha = pixels[(y * canvas.width + x) * 4 + 3];
 
-// Unified move handler for both mouse and touch
-const handleDragMove = (clientX, clientY) => {
-  if (!draggingId.current || !dishRef.current) return;
-
-  const draggingColony = microbes.find(
-    (m) => m.id === draggingId.current
-  );
-
-  if (!draggingColony) return;
-
-  // Other users cannot move Firebase cultures
-  if (
-    draggingColony.firebaseKey &&
-    draggingColony.creatorId !== visitorId
-  ) {
-    draggingId.current = null;
-    return;
-  }
-
-  const rect = dishRef.current.getBoundingClientRect();
-  const xPos = clientX - rect.left;
-  const yPos = clientY - rect.top;
-
-  let newX = xPos - dragOffset.current.x;
-  let newY = yPos - dragOffset.current.y;
-
-  const centerX = 235;
-  const centerY = 245;
-
-  // Allow movement across almost the entire Petri dish
-  const plateRadius = 185;
-  const colonyRadius =
-    (draggingColony.radius || 25) * (draggingColony.scale || 1);
-
-  const maxDistance = plateRadius - colonyRadius;
-
-  const dist = Math.hypot(
-    newX - centerX,
-    newY - centerY
-  );
-
-  if (dist > maxDistance) {
-    const angle = Math.atan2(
-      newY - centerY,
-      newX - centerX
-    );
-
-    newX =
-      centerX +
-      maxDistance * Math.cos(angle);
-
-    newY =
-      centerY +
-      maxDistance * Math.sin(angle);
-  }
-
-  // Prevent overlap with other cultures
-  const overlaps = microbes.some((m) => {
-    if (m.id === draggingColony.id) return false;
-    if (m.x === undefined || m.y === undefined) return false;
-
-    const otherRadius =
-      (m.radius || 25) * (m.scale || 1);
-
-    const requiredDistance =
-      colonyRadius + otherRadius + 8;
-
-    return (
-      Math.hypot(
-        newX - m.x,
-        newY - m.y
-      ) < requiredDistance
-    );
-  });
-
-  // If position would overlap another culture,
-  // keep the previous position.
-  if (overlaps) return;
-
-  setMicrobes((prev) =>
-    prev.map((m) =>
-      m.id === draggingId.current
-        ? {
-            ...m,
-            x: newX,
-            y: newY
+            if (alpha > 30) {
+              minX = Math.min(minX, x);
+              minY = Math.min(minY, y);
+              maxX = Math.max(maxX, x);
+              maxY = Math.max(maxY, y);
+            }
           }
-        : m
-    )
-  );
-};
-
-  const handleDragEnd = () => {
-    draggingId.current = null;
-  };
-
-const handleScaleChange = (id, delta) => {
-  setMicrobes((prev) =>
-    prev.map((m) => {
-      if (m.id === id) {
-        if (m.firebaseKey && m.creatorId !== visitorId) {
-          return m;
         }
 
-        const currentScale = m.scale || 1.0;
-        const newScale = Math.min(Math.max(0.4, currentScale + delta), 3.0);
+        if (maxX < 0 || maxY < 0) {
+          reject(new Error('blank'));
+          return;
+        }
 
-        return {
-          ...m,
-          scale: parseFloat(newScale.toFixed(2))
-        };
-      }
+        const padding = 4;
+        minX = Math.max(0, minX - padding);
+        minY = Math.max(0, minY - padding);
+        maxX = Math.min(canvas.width - 1, maxX + padding);
+        maxY = Math.min(canvas.height - 1, maxY + padding);
 
-      return m;
-    })
-  );
-};
+        const width = maxX - minX + 1;
+        const height = maxY - minY + 1;
 
- const handleInoculateSelected = async (customData = null, customRadius = 25) => {
-  const currentMediaInfo = MEDIA_TYPES[selectedMedium];
-  const organismInfo = ORGANISM_TEMPLATES[selectedOrganism];
+        const cropped = document.createElement('canvas');
+        cropped.width = width;
+        cropped.height = height;
 
-  const isBacteriaOnFungalMedia =
-    !customData &&
-    currentMediaInfo?.selectiveFor === 'fungus' &&
-    organismInfo?.type === 'bacteria';
+        cropped.getContext('2d').drawImage(
+          canvas,
+          minX, minY, width, height,
+          0, 0, width, height
+        );
 
-  const { x, y } = getRandomInDish();
+        // The drawing is reduced by 25% on the Petri dish so it fits
+        // more naturally while preserving its proportions. The original
+        // cropped drawing remains intact in the stored PNG.
+        const displayScale = 0.75;
+        const displayWidth = Math.max(1, Math.round(width * displayScale));
+        const displayHeight = Math.max(1, Math.round(height * displayScale));
 
+        resolve({
+          data: cropped.toDataURL('image/png'),
+          width: displayWidth,
+          height: displayHeight,
+          radius: Math.hypot(displayWidth / 2, displayHeight / 2) + 6
+        });
+      };
+
+      img.onerror = reject;
+      img.src = imgUrl;
+    });
+  };
+
+
+  const handleInoculateSelected = async (customData = null, customRadius = 25) => {
   // CUSTOM DRAWING
-  // Save it to Firebase only.
-  // The realtime listener will put it on everyone's Petri dish.
   if (customData) {
     const isSafe = await validateImageSafety(customData);
 
@@ -491,84 +509,129 @@ const handleScaleChange = (id, delta) => {
       return;
     }
 
+    let prepared;
+
+    try {
+      prepared = await prepareCustomSpecimen(customData);
+    } catch (error) {
+      setModalInfo({
+        title: 'Invalid Specimen',
+        body: 'Unable to read the drawing. Please draw your specimen again.'
+      });
+      return;
+    }
+
+    let position = getRandomInDish(prepared.radius);
+
+    // LOOP BEHAVIOUR: if the plate is crowded, progressively remove the
+    // oldest currently visible cultures from the local plate view and retry.
+    // Firebase records are never deleted, so removed cultures remain in the gallery.
+    if (!position) {
+      const oldestLocalFirst = microbes
+        .filter((m) => !m.firebaseKey)
+        .slice()
+        .sort((a, b) => (a.id || 0) - (b.id || 0));
+
+      for (let count = 1; count <= oldestLocalFirst.length && !position; count++) {
+        const removeIds = oldestLocalFirst.slice(0, count).map((m) => m.id);
+        position = getRandomInDish(prepared.radius, removeIds);
+        if (position) {
+          setMicrobes((prev) => prev.filter((m) => !removeIds.includes(m.id)));
+        }
+      }
+    }
+
+    if (!position) {
+      const oldestGlobalFirst = globalBioBank.slice().reverse();
+
+      for (let count = 1; count <= oldestGlobalFirst.length && !position; count++) {
+        const ignoredKeys = oldestGlobalFirst
+          .slice(0, count)
+          .map((item) => item.firebaseKey);
+        position = getRandomInDish(prepared.radius, ignoredKeys);
+      }
+    }
+
+    if (!position) {
+      // Do not interrupt inoculation with a full-dish acknowledgement popup.
+      // The gallery keeps all saved specimens; if this particular drawing
+      // physically cannot fit, simply leave it in the drawing pad.
+      return;
+    }
+
     const bankRef = ref(db, 'globalBioBank');
 
-    push(bankRef, {
+    const specimenRecord = {
       id: Date.now(),
-      data: customData,
+      data: prepared.data,
       date: new Date().toLocaleTimeString([], {
         hour: '2-digit',
         minute: '2-digit'
       }),
       flags: 0,
-      x,
-      y,
-      radius: customRadius,
+      x: position.x,
+      y: position.y,
+      radius: Math.hypot(prepared.width / 2, prepared.height / 2) + 6,
+      width: prepared.width,
+      height: prepared.height,
       scale: 1.0,
-creatorId: visitorId
+      creatorId: visitorId,
+      locked: true,
+      positionVersion: 2
+    };
+
+    // Wait for Firebase to create the record, then show the same specimen
+    // immediately on this user's plate. The realtime listener will reconcile
+    // it with the shared Bio-Bank for everyone else.
+    const pushedRef = await push(bankRef, specimenRecord);
+
+    setMicrobes((prev) => {
+      const withoutDuplicate = prev.filter((m) => m.firebaseKey !== pushedRef.key);
+      return [
+        ...withoutDuplicate,
+        {
+          id: `global-${pushedRef.key}`,
+          firebaseKey: pushedRef.key,
+          creatorId: visitorId,
+          type: 'custom',
+          data: specimenRecord.data,
+          width: specimenRecord.width,
+          height: specimenRecord.height,
+          locked: true,
+          radius: specimenRecord.radius,
+          scale: 1,
+          x: specimenRecord.x,
+          y: specimenRecord.y,
+          isDying: false
+        }
+      ];
     });
 
     return;
   }
 
-  // STANDARD ORGANISM
-  const colonyObj = {
-    id: Date.now() + Math.random(),
-    type: selectedOrganism,
-    radius: ORGANISM_TEMPLATES[selectedOrganism]?.radius || 22,
-    scale: 1.0,
-    x,
-    y,
-    isDying: isBacteriaOnFungalMedia
-  };
-
-  if (microbes.length >= 20) {
-    setMicrobes([colonyObj]);
-  } else {
-    setMicrobes((prev) => [...prev, colonyObj]);
-  }
-
-  setSelectedMicrobeId(colonyObj.id);
-
-  if (isBacteriaOnFungalMedia) {
-    setTimeout(() => {
-      setModalInfo({
-        title: 'Growth Inhibited (Antibiotic Activity)',
-        body: `${organismInfo.name} cannot survive on ${currentMediaInfo.name}. Added antibiotics disrupt bacterial cell wall assembly and protein synthesis.`
-      });
-    }, 800);
-
-    setTimeout(() => {
-      setMicrobes((prev) =>
-        prev.filter((m) => m.id !== colonyObj.id)
-      );
-    }, 2500);
-  }
+  // Standard templates remain available in the controls, but the shared
+  // Petri plate is reserved exclusively for custom specimens from the
+  // Global Specimen Bio-Bank. Standard templates are never added to it.
+  return;
 };
 
   const handleFlagSpecimen = (item, e) => {
     e.stopPropagation();
-    const confirmFlag = window.confirm('Flag this specimen for inappropriate content?');
-    if (!confirmFlag) return;
 
-    if (item.firebaseKey) {
-      const itemRef = ref(db, `globalBioBank/${item.firebaseKey}`);
-      remove(itemRef);
-    }
+    if (!item?.firebaseKey) return;
+
+    setModalInfo({
+      title: 'Specimen Reported',
+      body: 'Thank you. This specimen has been reported for review.'
+    });
   };
 
-  const currentMedia = MEDIA_TYPES[selectedMedium] || MEDIA_TYPES.sda;
-  const activeMicrobe = microbes.find((m) => m.id === selectedMicrobeId);
 
+
+  const currentMedia = MEDIA_TYPES[selectedMedium] || MEDIA_TYPES.sda;
   return (
-    <div 
-      onMouseMove={(e) => handleDragMove(e.clientX, e.clientY)}
-      onTouchMove={(e) => {
-        if (e.touches[0]) handleDragMove(e.touches[0].clientX, e.touches[0].clientY);
-      }}
-      onMouseUp={handleDragEnd}
-      onTouchEnd={handleDragEnd}
-      style={{ padding: '40px', minHeight: '100vh', position: 'relative', userSelect: 'none' }}
+    <div style={{ padding: '40px', minHeight: '100vh', position: 'relative', userSelect: 'none' }}
     >
       <style>{`
         @keyframes floatUfo {
@@ -583,6 +646,54 @@ creatorId: visitorId
           0% { transform: scale(1); filter: grayscale(0) opacity(1); }
           50% { transform: scale(1.1); filter: grayscale(0.5) opacity(0.8); }
           100% { transform: scale(0.2); filter: grayscale(1) opacity(0); }
+        }
+        @keyframes colonyPopIn {
+          0% {
+            opacity: 0;
+            transform: translateY(14px) scale(0.25);
+          }
+          65% {
+            opacity: 1;
+            transform: translateY(-3px) scale(1.08);
+          }
+          100% {
+            opacity: 1;
+            transform: translateY(0) scale(1);
+          }
+        }
+        .petri-colony-visual {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          transform-origin: center bottom;
+          animation: colonyPopIn 520ms cubic-bezier(0.2, 0.8, 0.25, 1) both;
+          transition: transform 180ms ease, filter 180ms ease;
+          position: relative;
+          z-index: 1;
+        }
+        @media (hover: hover) and (pointer: fine) {
+          .petri-colony-position:hover {
+            z-index: 50 !important;
+          }
+          .petri-colony-position:hover .petri-colony-visual {
+            transform: translateY(-8px) scale(1.12);
+            filter: drop-shadow(0 8px 8px rgba(0, 0, 0, 0.28));
+            z-index: 50;
+          }
+        }
+        .petri-colony-position:focus-visible {
+          z-index: 50 !important;
+          outline: none;
+        }
+        .petri-colony-position:focus-visible .petri-colony-visual {
+          transform: translateY(-8px) scale(1.12);
+          filter: drop-shadow(0 8px 8px rgba(0, 0, 0, 0.28));
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .petri-colony-visual {
+            animation: none;
+            transition: none;
+          }
         }
         .dying-organism {
           animation: dieBacteria 2.2s forwards ease-in-out;
@@ -648,7 +759,6 @@ creatorId: visitorId
             }} />
 
             <div 
-              ref={dishRef}
               style={{
                 position: 'relative',
                 width: '520px',
@@ -668,45 +778,47 @@ creatorId: visitorId
                 }} 
               />
               <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' }}>
-                {microbes.map((m) => {
-                  const isSelected = m.id === selectedMicrobeId;
+                {microbes.map((m, index) => {
                   const currentScale = m.scale || 1.0;
-                  const customSize = 50 * currentScale;
+                  const customWidth = m.width || ((m.radius || 25) * 2);
+                  const customHeight = m.height || ((m.radius || 25) * 2);
 
                   return (
                     <div 
-                      key={m.id} 
-                      onMouseDown={(e) => {
-                        e.stopPropagation();
-                        handleDragStart(m.id, e.clientX, e.clientY);
-                      }}
-                      onTouchStart={(e) => {
-                        e.stopPropagation();
-                        if (e.touches[0]) handleDragStart(m.id, e.touches[0].clientX, e.touches[0].clientY);
-                      }}
-                      className={m.isDying ? 'dying-organism' : ''} 
+                      key={m.id}
+                      className={`petri-colony-position ${m.isDying ? 'dying-organism' : ''}`}
+                      tabIndex={0}
+                      aria-label="Custom colony"
                       style={{ 
                         position: 'absolute', 
                         left: `${m.x}px`, 
                         top: `${m.y}px`, 
                         transform: 'translate(-50%, -50%)',
-                        cursor: 'grab',
-                        border: isSelected ? '2px dashed #2563EB' : '2px solid transparent',
+                        cursor: 'default',
+                        border: '2px solid transparent',
                         borderRadius: '50%',
                         padding: '4px',
-                        transition: 'border 0.2s ease',
-                        touchAction: 'none'
                       }}
                     >
-                      {m.type === 'custom' ? (
-                        <img 
-                          src={m.data} 
-                          alt="Custom Colony" 
-                          style={{ width: `${customSize}px`, height: `${customSize}px` }} 
-                        />
-                      ) : (
-                        ORGANISM_TEMPLATES[m.type]?.render(currentScale, selectedMedium)
-                      )}
+                      <div
+                        className="petri-colony-visual"
+                        style={{ animationDelay: `${Math.min(index * 110, 1400)}ms` }}
+                      >
+                        {m.type === 'custom' ? (
+                          <img 
+                            src={m.data} 
+                            alt="Custom Colony" 
+                            style={{
+                              width: `${customWidth * currentScale}px`,
+                              height: `${customHeight * currentScale}px`,
+                              objectFit: 'contain',
+                              display: 'block'
+                            }}
+                          />
+                        ) : (
+                          ORGANISM_TEMPLATES[m.type]?.render(currentScale, selectedMedium)
+                        )}
+                      </div>
                     </div>
                   );
                 })}
@@ -751,46 +863,16 @@ creatorId: visitorId
             <p style={{ fontWeight: 'bold', marginBottom: '8px' }}>3. Draw Custom Specimen:</p>
             <MicrobialDrawingPad onInoculate={(imgData) => handleInoculateSelected(imgData, 25)} />
           </div>
-
-          {activeMicrobe && (
-            <div style={{ padding: '15px', border: '1px solid #CBD5E1', borderRadius: '12px', backgroundColor: '#F8FAFC' }}>
-              <p style={{ fontWeight: 'bold', margin: '0 0 10px 0', fontSize: '14px', color: '#1B4D3E' }}>
-                Resize Selected Culture:
-              </p>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
-                <button 
-                  onClick={() => handleScaleChange(activeMicrobe.id, -0.15)} 
-                  style={{ padding: '6px 12px', fontSize: '13px' }}
-                >
-                  🔍 - Decrease
-                </button>
-                <span style={{ fontSize: '14px', fontWeight: 'bold', color: '#334155' }}>
-                  {((activeMicrobe.scale || 1.0) * 100).toFixed(0)}%
-                </span>
-                <button 
-                  onClick={() => handleScaleChange(activeMicrobe.id, 0.15)} 
-                  style={{ padding: '6px 12px', fontSize: '13px' }}
-                >
-                  🔍 + Increase
-                </button>
-              </div>
-            </div>
-          )}
         </div>
       </div>
 
       {globalBioBank.length > 0 && (
         <div style={{ marginTop: '50px', borderTop: '2px dashed #CBD5E1', paddingTop: '30px' }}>
           <h2 style={{ textAlign: 'center', marginBottom: '5px' }}>Global Specimen Bio-Bank</h2>
-          <p style={{ textAlign: 'center', color: '#64748B', fontSize: '13px', marginBottom: '20px' }}>
-            Shared user strains. Click any item to re-inoculate, or use 🚩 to flag/delete inappropriate drawings.
-          </p>
-
           <div style={{ display: 'flex', gap: '20px', overflowX: 'auto', padding: '10px' }}>
             {globalBioBank.map((specimen, idx) => (
               <div 
                 key={specimen.firebaseKey || specimen.id}
-                onClick={() => handleInoculateSelected(specimen.data, 25)}
                 style={{
                   position: 'relative',
                   flex: '0 0 auto',
@@ -800,12 +882,12 @@ creatorId: visitorId
                   border: '1px solid #E2E8F0',
                   boxShadow: '0 4px 12px rgba(0,0,0,0.06)',
                   textAlign: 'center',
-                  cursor: 'pointer'
+                  cursor: 'default'
                 }}
               >
                 <button
                   onClick={(e) => handleFlagSpecimen(specimen, e)}
-                  title="Flag/Delete Image"
+                  title="Report specimen"
                   style={{
                     position: 'absolute',
                     top: '8px',
