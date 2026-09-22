@@ -344,6 +344,9 @@ function App() {
     });
 
     return () => unsubscribeBank();
+  // This listener intentionally runs once and subscribes to Firebase for its lifetime.
+  // The helper functions above are render-local but do not need to retrigger the subscription.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const validateImageSafety = (imgUrl) => {
