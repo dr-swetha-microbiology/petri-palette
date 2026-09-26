@@ -367,8 +367,11 @@ function App() {
           if (pixels[i + 3] > 50) drawnPixels++;
         }
 
+        // Only reject a truly blank canvas. Do not reject dense/large fungal
+        // drawings: Aspergillus/Penicillium-style drawings can legitimately
+        // occupy a large fraction of the drawing pad.
         const coverage = drawnPixels / (img.width * img.height);
-        resolve(coverage > 0.005 && coverage < 0.85);
+        resolve(coverage > 0.005);
       };
       img.onerror = () => resolve(true);
     });
@@ -482,8 +485,20 @@ const getRandomInDish = (newRadius = 25, ignoredIds = []) => {
         // more naturally while preserving its proportions. The original
         // cropped drawing remains intact in the stored PNG.
         const displayScale = 0.75;
-        const displayWidth = Math.max(1, Math.round(width * displayScale));
-        const displayHeight = Math.max(1, Math.round(height * displayScale));
+        let displayWidth = Math.max(1, Math.round(width * displayScale));
+        let displayHeight = Math.max(1, Math.round(height * displayScale));
+
+        // Very large drawings (especially broad fungal drawings) can otherwise
+        // be physically larger than the coloured agar. Keep the user's original
+        // PNG intact in Firebase, but cap only its on-plate display size so every
+        // custom specimen can participate in the inoculation relay.
+        const maxDisplayRadius = 140;
+        const currentRadius = Math.hypot(displayWidth / 2, displayHeight / 2) + 6;
+        if (currentRadius > maxDisplayRadius) {
+          const fitScale = (maxDisplayRadius - 6) / Math.hypot(displayWidth / 2, displayHeight / 2);
+          displayWidth = Math.max(1, Math.round(displayWidth * fitScale));
+          displayHeight = Math.max(1, Math.round(displayHeight * fitScale));
+        }
 
         resolve({
           data: cropped.toDataURL('image/png'),
@@ -545,20 +560,50 @@ const getRandomInDish = (newRadius = 25, ignoredIds = []) => {
     }
 
     if (!position) {
-      const oldestGlobalFirst = globalBioBank.slice().reverse();
+      // CUSTOM-SPECIMEN RELAY:
+      // Replace older custom cultures on the current plate view until the
+      // new drawing has enough room. Firebase/Bio-Bank records are untouched.
+      const visibleCustoms = microbes
+        .filter((m) => m.firebaseKey)
+        .slice();
 
-      for (let count = 1; count <= oldestGlobalFirst.length && !position; count++) {
-        const ignoredKeys = oldestGlobalFirst
+      for (let count = 1; count <= visibleCustoms.length && !position; count++) {
+        const removeKeys = visibleCustoms
           .slice(0, count)
           .map((item) => item.firebaseKey);
-        position = getRandomInDish(prepared.radius, ignoredKeys);
+
+        position = getRandomInDish(prepared.radius, removeKeys);
+
+        if (position) {
+          setMicrobes((prev) =>
+            prev.filter((m) => !removeKeys.includes(m.firebaseKey))
+          );
+        }
       }
     }
 
     if (!position) {
-      // Do not interrupt inoculation with a full-dish acknowledgement popup.
-      // The gallery keeps all saved specimens; if this particular drawing
-      // physically cannot fit, simply leave it in the drawing pad.
+      // If standard/local colonies are blocking the agar, relay them out too.
+      // This keeps custom inoculation continuous without deleting Firebase data.
+      const localColonies = microbes
+        .filter((m) => !m.firebaseKey)
+        .slice();
+
+      for (let count = 1; count <= localColonies.length && !position; count++) {
+        const removeIds = localColonies.slice(0, count).map((m) => m.id);
+        position = getRandomInDish(prepared.radius, removeIds);
+
+        if (position) {
+          setMicrobes((prev) =>
+            prev.filter((m) => !removeIds.includes(m.id))
+          );
+        }
+      }
+    }
+
+    if (!position) {
+      // The drawing is still not lost: Firebase is not written until a valid
+      // plate position exists, so keep the drawing in the pad and allow retry.
       return;
     }
 
@@ -613,10 +658,87 @@ const getRandomInDish = (newRadius = 25, ignoredIds = []) => {
     return;
   }
 
-  // Standard templates remain available in the controls, but the shared
-  // Petri plate is reserved exclusively for custom specimens from the
-  // Global Specimen Bio-Bank. Standard templates are never added to it.
-  return;
+  // STANDARD ORGANISM
+  // Standard templates are inoculated locally only. They are not saved to
+  // the Global Specimen Bio-Bank.
+  const currentMediaInfo = MEDIA_TYPES[selectedMedium];
+  const organismInfo = ORGANISM_TEMPLATES[selectedOrganism];
+
+  const isBacteriaOnFungalMedia =
+    currentMediaInfo?.selectiveFor === 'fungus' &&
+    organismInfo?.type === 'bacteria';
+
+  let position = getRandomInDish(organismInfo?.radius || 22);
+
+  // RELAY FOR STANDARD TEMPLATES:
+  // If the plate is crowded by shared custom specimens, recycle the visible
+  // custom cultures first. This does not delete anything from Firebase.
+  if (!position) {
+    const visibleCustoms = microbes
+      .filter((m) => m.firebaseKey)
+      .slice();
+
+    for (let count = 1; count <= visibleCustoms.length && !position; count++) {
+      const removeKeys = visibleCustoms.slice(0, count).map((m) => m.firebaseKey);
+      position = getRandomInDish(organismInfo?.radius || 22, removeKeys);
+      if (position) {
+        setMicrobes((prev) =>
+          prev.filter((m) => !removeKeys.includes(m.firebaseKey))
+        );
+      }
+    }
+  }
+
+  // Then recycle older local standard colonies if needed.
+  if (!position) {
+    const oldestLocalFirst = microbes
+      .filter((m) => !m.firebaseKey)
+      .slice()
+      .sort((a, b) => (a.id || 0) - (b.id || 0));
+
+    for (let count = 1; count <= oldestLocalFirst.length && !position; count++) {
+      const removeIds = oldestLocalFirst.slice(0, count).map((m) => m.id);
+      position = getRandomInDish(organismInfo?.radius || 22, removeIds);
+      if (position) {
+        setMicrobes((prev) => prev.filter((m) => !removeIds.includes(m.id)));
+      }
+    }
+  }
+
+  // Absolute fallback: make room on the current visual plate only.
+  // No Firebase specimen is deleted.
+  if (!position) {
+    setMicrobes((prev) => []);
+    position = { x: 260, y: 260 };
+  }
+
+  const standardColony = {
+    id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    type: selectedOrganism,
+    radius: organismInfo?.radius || 22,
+    scale: 1,
+    x: position.x,
+    y: position.y,
+    locked: false,
+    isDying: isBacteriaOnFungalMedia
+  };
+
+  setMicrobes((prev) => [...prev, standardColony]);
+  
+
+  // Restore the original selective-medium inhibition behaviour.
+  if (isBacteriaOnFungalMedia) {
+    setTimeout(() => {
+      setModalInfo({
+        title: 'Growth Inhibited (Antibiotic Activity)',
+        body: `${organismInfo.name} cannot survive on ${currentMediaInfo.name}. Added antibiotics disrupt bacterial cell wall assembly and protein synthesis.`
+      });
+    }, 800);
+
+    setTimeout(() => {
+      setMicrobes((prev) => prev.filter((m) => m.id !== standardColony.id));
+    }, 2500);
+  }
 };
 
   const handleFlagSpecimen = (item, e) => {
@@ -868,6 +990,19 @@ const getRandomInDish = (newRadius = 25, ignoredIds = []) => {
           </div>
         </div>
       </div>
+
+      <footer style={{
+        marginTop: '40px',
+        paddingTop: '18px',
+        paddingBottom: '10px',
+        textAlign: 'center',
+        color: '#475569',
+        fontSize: '12px',
+        lineHeight: '1.6'
+      }}>
+        <div style={{ fontWeight: '700', letterSpacing: '0.08em' }}>PETRI PALETTE™</div>
+        <div>© 2026 Dr. Swetha P. All Rights Reserved.</div>
+      </footer>
 
       {globalBioBank.length > 0 && (
         <div style={{ marginTop: '50px', borderTop: '2px dashed #CBD5E1', paddingTop: '30px' }}>
